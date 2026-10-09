@@ -34,6 +34,8 @@ type TaskType int
 const (
 	MapTask TaskType = iota
 	WaitTask
+	ReduceTask
+	ExitTask
 )
 
 type RequestTaskArgs struct{}
@@ -43,4 +45,14 @@ type RequestTaskReply struct {
 	TaskID   int
 	Filename string
 	NReduce  int
+	NMap     int
+	Attempt  int
 }
+
+type ReportTaskArgs struct {
+	Type    TaskType
+	TaskID  int
+	Attempt int
+}
+
+type ReportTaskReply struct{}

@@ -1,5 +1,6 @@
 package mr
 
+import "fmt"
 import "log"
 import "net"
 import "os"
@@ -39,6 +40,12 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 
 	if !allCompleted(c.reduceTasks) {
 		c.assignTask(c.reduceTasks, ReduceTask, reply)
+		if reply.Type == ReduceTask {
+			reply.MapAttempts = make([]int, len(c.mapTasks))
+			for i, task := range c.mapTasks {
+				reply.MapAttempts[i] = task.Attempt
+			}
+		}
 		return nil
 	}
 
@@ -93,6 +100,13 @@ func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) e
 	}
 	task := &tasks[args.TaskID]
 	if task.Status == InProgress && task.Attempt == args.Attempt {
+		if args.Type == ReduceTask {
+			source := fmt.Sprintf("mr-out-%d-attempt-%d", args.TaskID, args.Attempt)
+			destination := fmt.Sprintf("mr-out-%d", args.TaskID)
+			if err := os.Rename(source, destination); err != nil {
+				return err
+			}
+		}
 		task.Status = Completed
 	}
 	return nil

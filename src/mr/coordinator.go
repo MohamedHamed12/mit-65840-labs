@@ -29,6 +29,7 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 
 	reply.Type = WaitTask
 	reply.NReduce = c.nReduce
+	reply.NMap = len(c.mapTasks)
 
 	for id := range c.mapTasks {
 		task := &c.mapTasks[id]
@@ -43,9 +44,24 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 		reply.Type = MapTask
 		reply.TaskID = id
 		reply.Filename = task.Filename
+		reply.Attempt = task.Attempt
 		return nil
 	}
 
+	return nil
+}
+
+func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if args.Type != MapTask || args.TaskID < 0 || args.TaskID >= len(c.mapTasks) {
+		return nil
+	}
+	task := &c.mapTasks[args.TaskID]
+	if task.Status == InProgress && task.Attempt == args.Attempt {
+		task.Status = Completed
+	}
 	return nil
 }
 

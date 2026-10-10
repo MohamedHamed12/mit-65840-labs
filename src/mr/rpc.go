@@ -47,6 +47,7 @@ type RequestTaskReply struct {
 	NReduce  int
 	NMap     int
 	Attempt  int
+	MapAttempts []int
 }
 
 type ReportTaskArgs struct {

@@ -17,8 +17,9 @@ type Task struct {
 
 type Coordinator struct {
 	mu       sync.Mutex
-	mapTasks []Task
-	nReduce  int
+	mapTasks    []Task
+	reduceTasks []Task
+	nReduce     int
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -31,9 +32,33 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 	reply.NReduce = c.nReduce
 	reply.NMap = len(c.mapTasks)
 
-	for id := range c.mapTasks {
-		task := &c.mapTasks[id]
-		if task.Status != Idle {
+	if !allCompleted(c.mapTasks) {
+		c.assignTask(c.mapTasks, MapTask, reply)
+		return nil
+	}
+
+	if !allCompleted(c.reduceTasks) {
+		c.assignTask(c.reduceTasks, ReduceTask, reply)
+		return nil
+	}
+
+	reply.Type = ExitTask
+	return nil
+}
+
+func allCompleted(tasks []Task) bool {
+	for _, task := range tasks {
+		if task.Status != Completed {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Coordinator) assignTask(tasks []Task, taskType TaskType, reply *RequestTaskReply) {
+	for id := range tasks {
+		task := &tasks[id]
+		if task.Status != Idle && (task.Status != InProgress || time.Since(task.StartedAt) < 10*time.Second) {
 			continue
 		}
 
@@ -41,24 +66,32 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 		task.StartedAt = time.Now()
 		task.Attempt++
 
-		reply.Type = MapTask
+		reply.Type = taskType
 		reply.TaskID = id
 		reply.Filename = task.Filename
 		reply.Attempt = task.Attempt
-		return nil
+		return
 	}
-
-	return nil
 }
 
 func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if args.Type != MapTask || args.TaskID < 0 || args.TaskID >= len(c.mapTasks) {
+	var tasks []Task
+	switch args.Type {
+	case MapTask:
+		tasks = c.mapTasks
+	case ReduceTask:
+		tasks = c.reduceTasks
+	default:
 		return nil
 	}
-	task := &c.mapTasks[args.TaskID]
+
+	if args.TaskID < 0 || args.TaskID >= len(tasks) {
+		return nil
+	}
+	task := &tasks[args.TaskID]
 	if task.Status == InProgress && task.Attempt == args.Attempt {
 		task.Status = Completed
 	}
@@ -89,12 +122,10 @@ func (c *Coordinator) server(sockname string) {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// Your code here.
-
-
-	return ret
+	return allCompleted(c.mapTasks) && allCompleted(c.reduceTasks)
 }
 
 // create a Coordinator.
@@ -105,6 +136,9 @@ func MakeCoordinator(sockname string, files []string, nReduce int) *Coordinator 
 
 	for _, filename := range files {
 		c.mapTasks = append(c.mapTasks, Task{Filename: filename, Status: Idle})
+	}
+	for i := 0; i < nReduce; i++ {
+		c.reduceTasks = append(c.reduceTasks, Task{Status: Idle})
 	}
 
 	c.server(sockname)

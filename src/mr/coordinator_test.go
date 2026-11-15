@@ -1,11 +1,15 @@
 package mr
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
 func TestCoordinatorMapReduceLifecycle(t *testing.T) {
+	useTempDir(t)
 	c := Coordinator{
 		mapTasks:    []Task{{Filename: "a.txt"}, {Filename: "b.txt"}},
 		reduceTasks: make([]Task, 2),
@@ -22,6 +26,9 @@ func TestCoordinatorMapReduceLifecycle(t *testing.T) {
 	}
 	report := func(task RequestTaskReply) {
 		t.Helper()
+		if task.Type == ReduceTask {
+			writeAttemptOutput(t, task, "result")
+		}
 		if err := c.ReportTask(&ReportTaskArgs{Type: task.Type, TaskID: task.TaskID, Attempt: task.Attempt}, &ReportTaskReply{}); err != nil {
 			t.Fatal(err)
 		}
@@ -44,7 +51,7 @@ func TestCoordinatorMapReduceLifecycle(t *testing.T) {
 	if reduce0.Type != ReduceTask || reduce1.Type != ReduceTask || reduce0.TaskID == reduce1.TaskID {
 		t.Fatalf("expected distinct reduce tasks, got %+v and %+v", reduce0, reduce1)
 	}
-	if reduce0.NMap != 2 || reduce1.NReduce != 2 {
+	if reduce0.NMap != 2 || reduce1.NReduce != 2 || len(reduce0.MapAttempts) != 2 || reduce0.MapAttempts[0] != first.Attempt || reduce0.MapAttempts[1] != second.Attempt {
 		t.Fatal("missing map/reduce counts")
 	}
 	if c.Done() || request().Type != WaitTask {
@@ -58,6 +65,7 @@ func TestCoordinatorMapReduceLifecycle(t *testing.T) {
 }
 
 func TestCoordinatorTimeoutRejectsStaleAttempt(t *testing.T) {
+	useTempDir(t)
 	c := Coordinator{mapTasks: []Task{{Filename: "a.txt"}}, reduceTasks: []Task{{}}, nReduce: 1}
 
 	first := RequestTaskReply{}
@@ -89,8 +97,55 @@ func TestCoordinatorTimeoutRejectsStaleAttempt(t *testing.T) {
 	if c.Done() {
 		t.Fatal("stale reduce report completed job")
 	}
+	writeAttemptOutput(t, reduceRetry, "winning")
 	c.ReportTask(&ReportTaskArgs{Type: reduceRetry.Type, TaskID: reduceRetry.TaskID, Attempt: reduceRetry.Attempt}, &ReportTaskReply{})
 	if !c.Done() {
 		t.Fatal("valid retry did not complete job")
+	}
+}
+
+func useTempDir(t *testing.T) {
+	t.Helper()
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(original) })
+}
+
+func writeAttemptOutput(t *testing.T, task RequestTaskReply, contents string) {
+	t.Helper()
+	filename := fmt.Sprintf("mr-out-%d-attempt-%d", task.TaskID, task.Attempt)
+	if err := os.WriteFile(filename, []byte(contents), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorPublishesOnlyAcceptedReduceAttempt(t *testing.T) {
+	useTempDir(t)
+	c := Coordinator{reduceTasks: []Task{{Status: InProgress, Attempt: 2}}, nReduce: 1}
+	stale := ReportTaskArgs{Type: ReduceTask, TaskID: 0, Attempt: 1}
+	valid := ReportTaskArgs{Type: ReduceTask, TaskID: 0, Attempt: 2}
+	writeAttemptOutput(t, RequestTaskReply{TaskID: 0, Attempt: 1}, "stale")
+	writeAttemptOutput(t, RequestTaskReply{TaskID: 0, Attempt: 2}, "accepted")
+
+	if err := c.ReportTask(&stale, &ReportTaskReply{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat("mr-out-0"); !os.IsNotExist(err) {
+		t.Fatal("stale attempt published output")
+	}
+	if err := c.ReportTask(&valid, &ReportTaskReply{}); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(".", "mr-out-0"))
+	if err != nil || string(contents) != "accepted" {
+		t.Fatalf("expected accepted output, got %q, %v", contents, err)
+	}
+	if c.reduceTasks[0].Status != Completed {
+		t.Fatal("valid attempt not completed")
 	}
 }

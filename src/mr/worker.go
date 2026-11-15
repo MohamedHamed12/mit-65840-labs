@@ -99,7 +99,7 @@ func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) err
 			err = closeErr
 		}
 		if err == nil {
-			err = os.Rename(name, fmt.Sprintf("mr-%d-%d", task.TaskID, bucket))
+			err = os.Rename(name, fmt.Sprintf("mr-%d-%d-%d", task.TaskID, task.Attempt, bucket))
 		}
 		if err != nil {
 			os.Remove(name)
@@ -110,9 +110,12 @@ func runMapTask(task RequestTaskReply, mapf func(string, string) []KeyValue) err
 }
 
 func runReduceTask(task RequestTaskReply, reducef func(string, []string) string) error {
+	if len(task.MapAttempts) != task.NMap {
+		return fmt.Errorf("expected %d map attempts, got %d", task.NMap, len(task.MapAttempts))
+	}
 	var intermediate []KeyValue
 	for mapID := 0; mapID < task.NMap; mapID++ {
-		file, err := os.Open(fmt.Sprintf("mr-%d-%d", mapID, task.TaskID))
+		file, err := os.Open(fmt.Sprintf("mr-%d-%d-%d", mapID, task.MapAttempts[mapID], task.TaskID))
 		if err != nil {
 			return err
 		}
@@ -161,7 +164,7 @@ func runReduceTask(task RequestTaskReply, reducef func(string, []string) string)
 		err = closeErr
 	}
 	if err == nil {
-		err = os.Rename(name, fmt.Sprintf("mr-out-%d", task.TaskID))
+		err = os.Rename(name, fmt.Sprintf("mr-out-%d-attempt-%d", task.TaskID, task.Attempt))
 	}
 	if err != nil {
 		os.Remove(name)
